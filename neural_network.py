@@ -1,12 +1,14 @@
 import time
+import experiments
 import numpy
 import scipy.special as sci
 
-MNIST_TRAIN_100_CSV = './resources/mnist_train_100.csv'
-MNIST_TEST_10_CSV = './resources/mnist_test_10.csv'
+import util
 
 MNIST_TRAIN = './resources/mnist_train.csv'
 MNIST_TEST = './resources/mnist_test.csv'
+
+LEARNING_PLOTS_FOLDER = '.plots'
 
 class NeuralNetwork:
 
@@ -17,13 +19,17 @@ class NeuralNetwork:
         self.o_nodes = output_nodes
 
         self.lr = learning_rate
+        self.mr = []
 
         self.wih = numpy.random.normal(0.0, pow(self.h_nodes, -0.5), (self.h_nodes, self.i_nodes))
         self.who = numpy.random.normal(0.0, pow(self.o_nodes, -0.5), (self.o_nodes, self.h_nodes))
 
         self.activation_function = lambda x: sci.expit(x)
 
-    def train(self, inputs_list, targets_list):
+    def __str__(self):
+        return f"Neural network with LR: {self.lr}"
+
+    def back_propagate(self, inputs_list, targets_list):
         numpy_inputs = numpy.array(inputs_list, ndmin=2).T
         numpy_targets = numpy.array(targets_list, ndmin=2).T
 
@@ -46,23 +52,32 @@ class NeuralNetwork:
     def query(self, inputs_list):
         numpy_inputs = numpy.array(inputs_list, ndmin=2).T
 
-        hidden_inputs = numpy.dot(self.wih, numpy_inputs)
+        hidden_inputs = numpy.dot(self.wih, numpy_inputs) + 1   #biased neuron
         hidden_outputs = self.activation_function(hidden_inputs)
 
-        final_inputs = numpy.dot(self.who, hidden_outputs)
+        final_inputs = numpy.dot(self.who, hidden_outputs) + 1   #biased neuron
         final_outputs = self.activation_function(final_inputs)
 
         return final_outputs
+
+    def mistakes(self, fails: int):
+        # adapt learning rate
+        if len(self.mr) > 0:
+            threshold = self.mr[-1] - fails
+            if threshold < 5:
+                self.lr = self.lr / 2
+
+        self.mr.append(fails)
 
 if __name__ == "__main__":
     start_time = time.time()
 
     # network configs
-    input_nodes = 784
-    hidden_nodes = 200
+    input_nodes = 28 * 28
+    hidden_nodes = 100
     output_nodes = 10
-    learning_rate = 0.25
-    epochs = 5
+    learning_rate = 0.06    # 0.065
+    epochs = 50
 
     train_file = MNIST_TRAIN
     test_file = MNIST_TEST
@@ -70,6 +85,7 @@ if __name__ == "__main__":
     # create network
     network = NeuralNetwork(input_nodes, hidden_nodes, output_nodes, learning_rate)
 
+    # ==================================================================================================================
     # open training data
     # CSV contains 100 handwritten numbers in the following format:
     # mnist_train_100.csv
@@ -82,6 +98,7 @@ if __name__ == "__main__":
 
     # train network according to dataset
     for epoch in range(epochs):
+        mistakes = 0
         for i, record in enumerate(training_data_list):
             try:
                 record_value = record.split(',')
@@ -90,40 +107,47 @@ if __name__ == "__main__":
                 targets = numpy.zeros(output_nodes) + 0.01
 
                 targets[int(record_value[0])] = 0.99
-                network.train(inputs, targets)
+                network.back_propagate(inputs, targets)
+
+                # identify mistakes to identify epoch number
+                expected = int(record_value[0])
+                actual = numpy.argmax(network.query(inputs))
+                if not (expected == actual):
+                    mistakes += 1
+
             except ValueError as e:
-                pass
+                mistakes+=1
 
-    # test network with test dataset
-    testing_data_file = open(test_file)
-    testing_data_list = testing_data_file.readlines()
-    testing_data_file.close()
+        network.mistakes(mistakes)
+        print(f"Epoch {epoch + 1}, mistakes {mistakes}, LR {network.lr}")
 
-    data_length = 0
-    success_rate = 0
-    for i, record in enumerate(testing_data_list):
-        try:
-            record_value = record.split(',')
-            expected = int(record_value[0])
+    # Save plot of learning for different learning rate
+    x_axis=range(1, epochs + 1)
+    x_axis_title="Epochs"
+    y_axis=network.mr
+    y_axis_title="Mistakes"
+    plot_file=f"{LEARNING_PLOTS_FOLDER}/LR_{network.lr}_{time.time_ns()}.png"
+    plot_title=str(network)
 
-            # test inputs for neural network
-            inputs = (numpy.asarray(record_value[1:], numpy.dtype(float)) / 255.0 * 0.99) + 0.01
-            # test outputs for neural network
-            outputs = network.query(inputs)
-            # actual output of nn
-            actual = numpy.argmax(outputs)
-
-            output = [[i, round(float(v[0]), 4)] for i, v in enumerate(outputs)]
-            # print(f"{expected == actual}: expected={expected}, actual={actual}, output={output}")
-
-            data_length += 1
-            success_rate += 1 if expected == actual else 0
-        except ValueError as e:
-            pass
+    util.save_plot(x_axis, y_axis, plot_file, x_axis_title, y_axis_title, plot_title)
 
     end_time = time.time()
     execution_time = end_time - start_time
 
     print()
-    print(f"execution={execution_time:.5f}s, data length: {data_length}, efficiency_rate={success_rate / data_length}, "
+    print(f"Training complete: data length: {len(training_data_list)}, time={execution_time:2}s, "
+          f"epochs={epochs}, LR={network.lr}")
+
+    # ==================================================================================================================
+    # Test MNIST test file
+    data_length, success_rate = experiments.test_mnist(network, MNIST_TEST)
+    print()
+    print(f"MNIST test file: data length: {data_length}, efficiency_rate={success_rate / data_length}, "
+          f"success={success_rate}, fail={data_length - success_rate}")
+
+    # ==================================================================================================================
+    # Test my handwriting
+    data_length, success_rate = experiments.test_my_handwriting(network)
+    print()
+    print(f"My handwriting testing: data length: {data_length}, efficiency_rate={success_rate / data_length}, "
           f"success={success_rate}, fail={data_length - success_rate}")
